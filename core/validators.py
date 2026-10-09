@@ -1,136 +1,92 @@
 #!/usr/bin/env python3
 """
-Validators - Check if GIFs meet Slack's requirements.
-
-These validators help ensure your GIFs meet Slack's size and dimension constraints.
+Validators - Check whether a PDF can be opened and summarized from embedded text.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 
+from pypdf import PdfReader
 
-def validate_gif(
-    gif_path: str | Path, is_emoji: bool = True, verbose: bool = True
+
+def validate_pdf(
+    pdf_path: str | Path,
+    min_text_characters: int = 20,
+    verbose: bool = True,
 ) -> tuple[bool, dict]:
     """
-    Validate GIF for Slack (dimensions, size, frame count).
+    Validate a PDF for text-based summarization.
 
     Args:
-        gif_path: Path to GIF file
-        is_emoji: True for emoji (128x128 recommended), False for message GIF
-        verbose: Print validation details
+        pdf_path: Path to PDF file.
+        min_text_characters: Minimum extracted text required to mark it ready.
+        verbose: Print validation details.
 
     Returns:
-        Tuple of (passes: bool, results: dict with all details)
+        Tuple of (passes, results).
     """
-    from PIL import Image
+    path = Path(pdf_path)
 
-    gif_path = Path(gif_path)
+    if not path.exists():
+        return False, {"error": f"File not found: {path}", "passes": False}
+    if path.suffix.lower() != ".pdf":
+        return False, {"error": f"Not a PDF file: {path}", "passes": False}
 
-    if not gif_path.exists():
-        return False, {"error": f"File not found: {gif_path}"}
-
-    # Get file size
-    size_bytes = gif_path.stat().st_size
-    size_kb = size_bytes / 1024
-    size_mb = size_kb / 1024
-
-    # Get dimensions and frame info
     try:
-        with Image.open(gif_path) as img:
-            width, height = img.size
+        reader = PdfReader(str(path))
+        page_count = len(reader.pages)
+        if page_count == 0:
+            return False, {"error": "PDF contains no pages", "passes": False}
 
-            # Count frames
-            frame_count = 0
-            try:
-                while True:
-                    img.seek(frame_count)
-                    frame_count += 1
-            except EOFError:
-                pass
+        extracted_characters = 0
+        pages_with_text = 0
 
-            # Get duration
-            try:
-                duration_ms = img.info.get("duration", 100)
-                total_duration = (duration_ms * frame_count) / 1000
-                fps = frame_count / total_duration if total_duration > 0 else 0
-            except:
-                total_duration = None
-                fps = None
+        for page in reader.pages:
+            text = (page.extract_text() or "").strip()
+            extracted_characters += len(text)
+            if text:
+                pages_with_text += 1
 
-    except Exception as e:
-        return False, {"error": f"Failed to read GIF: {e}"}
+        encrypted = bool(reader.is_encrypted)
 
-    # Validate dimensions
-    if is_emoji:
-        optimal = width == height == 128
-        acceptable = width == height and 64 <= width <= 128
-        dim_pass = acceptable
-    else:
-        aspect_ratio = (
-            max(width, height) / min(width, height)
-            if min(width, height) > 0
-            else float("inf")
-        )
-        dim_pass = aspect_ratio <= 2.0 and 320 <= min(width, height) <= 640
+    except Exception as exc:
+        return False, {"error": f"Failed to read PDF: {exc}", "passes": False}
 
+    passes = extracted_characters >= min_text_characters
     results = {
-        "file": str(gif_path),
-        "passes": dim_pass,
-        "width": width,
-        "height": height,
-        "size_kb": size_kb,
-        "size_mb": size_mb,
-        "frame_count": frame_count,
-        "duration_seconds": total_duration,
-        "fps": fps,
-        "is_emoji": is_emoji,
-        "optimal": optimal if is_emoji else None,
+        "file": str(path),
+        "passes": passes,
+        "page_count": page_count,
+        "pages_with_text": pages_with_text,
+        "extracted_characters": extracted_characters,
+        "encrypted": encrypted,
+        "needs_ocr": not passes,
     }
 
-    # Print if verbose
     if verbose:
-        print(f"\nValidating {gif_path.name}:")
-        print(
-            f"  Dimensions: {width}x{height}"
-            + (
-                f" ({'optimal' if optimal else 'acceptable'})"
-                if is_emoji and acceptable
-                else ""
-            )
-        )
-        print(
-            f"  Size: {size_kb:.1f} KB"
-            + (f" ({size_mb:.2f} MB)" if size_mb >= 1.0 else "")
-        )
-        print(
-            f"  Frames: {frame_count}"
-            + (f" @ {fps:.1f} fps ({total_duration:.1f}s)" if fps else "")
-        )
+        print(f"\nValidating {path.name}:")
+        print(f"  Pages: {page_count}")
+        print(f"  Pages with extractable text: {pages_with_text}")
+        print(f"  Extracted characters: {extracted_characters}")
+        print(f"  Encrypted: {'yes' if encrypted else 'no'}")
+        if passes:
+            print("  Ready for text-based summarization")
+        else:
+            print("  Not enough extractable text; OCR may be required")
 
-        if not dim_pass:
-            print(
-                f"  Note: {'Emoji should be 128x128' if is_emoji else 'Unusual dimensions for Slack'}"
-            )
-
-        if size_mb > 5.0:
-            print(f"  Note: Large file size - consider fewer frames/colors")
-
-    return dim_pass, results
+    return passes, results
 
 
-def is_slack_ready(
-    gif_path: str | Path, is_emoji: bool = True, verbose: bool = True
+def is_pdf_ready(
+    pdf_path: str | Path,
+    min_text_characters: int = 20,
+    verbose: bool = True,
 ) -> bool:
-    """
-    Quick check if GIF is ready for Slack.
-
-    Args:
-        gif_path: Path to GIF file
-        is_emoji: True for emoji GIF, False for message GIF
-        verbose: Print feedback
-
-    Returns:
-        True if dimensions are acceptable
-    """
-    passes, _ = validate_gif(gif_path, is_emoji, verbose)
+    """Quick check whether a PDF is ready for text-based summarization."""
+    passes, _ = validate_pdf(
+        pdf_path,
+        min_text_characters=min_text_characters,
+        verbose=verbose,
+    )
     return passes
